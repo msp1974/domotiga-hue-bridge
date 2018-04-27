@@ -26,3 +26,12 @@ The HTTP_LISTEN_PORT is the port the Hue Emulator responds on.  You can set this
 Set the ECHO_GROUP to be the name of the Domotiga group you created earlier and have added to the devices you want to be controlled by your Echo.
 
 That's it!  Run this script and get your Echo to do a device discovery.  Your Domotiga devices should now show in the Alexa app.
+
+# Installing domo-hue-bridge as a service
+
+I have included a sample systemd script to be able to install domo-hue-bridge as a service.
+If you are not sure how to do this, there are plenty of how-to's available on the web.
+
+# Credits
+
+domo-hue-bridge is based on the fabulous ha-local-echo script by Bruce Locke which has been amended to use the Domotiga JsonRPC Rest API instead of home-assistant.
