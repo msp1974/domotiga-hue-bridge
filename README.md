@@ -16,7 +16,8 @@ In the script near the top is a config section.
 DOMOTIGA_BASE_URL = "http://localhost:9090"
 LISTEN_IP = getIpAddress()
 HTTP_LISTEN_PORT = 8000
-ECHO_GROUP = "Alexa"```
+ECHO_GROUP = "Alexa"
+```
 
 Set the DOMOTIGA_BASE_URL to be the url of the JSONRPC server on Domotiga.  If you are running this on the same server as the Domotiga server, then this is probably already set correctly.
 
