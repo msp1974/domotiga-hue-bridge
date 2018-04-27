@@ -1,0 +1,15 @@
+[Unit]
+Description=Domotiga Hue Bridge
+After=network.target
+
+[Service]
+Type=simple
+ExecStart= /usr/bin/python3.4 /opt/domo-hue-bridge/domo-hue-bridge.py
+User=domo-hue-bridge
+Restart=always
+RestartSec=2
+StartLimitInterval=0
+SyslogIdentifier=domo-hue-bridge
+
+[Install]
+WantedBy=multi-user.target
