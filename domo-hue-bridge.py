@@ -8,27 +8,57 @@
 import requests
 import flask
 import json
-import threading
-import socket
-import socketserver
 import time
 import json
 import datetime
 import re
 import sys
 import zlib
+import threading
+import socket
+import socketserver
+import logging
+import argparse
+import config
+
+global upnp_responder
+global app
 
 def getIpAddress():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("8.8.8.8", 80))
     return s.getsockname()[0]
 
-# Config
-DOMOTIGA_BASE_URL = "http://localhost:9090"
-LISTEN_IP = getIpAddress()
-HTTP_LISTEN_PORT = 8000
-ECHO_GROUP = "Alexa"
+SERVER_IP = getIpAddress()
 
+if config.PROXY:
+    LISTEN_IP = '127.0.0.1'
+else:
+    LISTEN_IP = SERVER_IP
+
+
+#Set Logging Level
+parser = argparse.ArgumentParser("domo-hue-bridge")
+parser.add_argument("--debug", help="Set debugging to a file for diagnosis of discovery issues", action="store_true")
+args = parser.parse_args()
+if args.debug:
+    print("Running in DEBUG Mode")
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s",
+        filemode='w',
+        handlers=[
+            logging.FileHandler("domo-hue-bridge.log", mode = 'w'),
+            logging.StreamHandler()
+        ])
+else:
+    print("Running in NORMAL Mode")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(message)s",
+        handlers=[
+            logging.StreamHandler()
+        ])
 #
 # Domotiga
 #
@@ -36,17 +66,17 @@ class Domotiga:
     entities = {}
     headers = {}
 
-    def __init__(self, base_url=DOMOTIGA_BASE_URL):
+    def __init__(self, base_url=config.DOMOTIGA_BASE_URL):
         self.base_url = base_url
         self.headers = { 'content-type': 'application/json' }
         self.fetch_entities()
 
     def fetch_entities(self):
-        print("Fetching Domotiga entities...")
+        logging.info("Fetching Domotiga entities...")
 
         entities = {}
 
-        data = {"jsonrpc": "2.0", "method": "device.list", "params": {"groups" : [ECHO_GROUP]}, "id": 1}
+        data = {"jsonrpc": "2.0", "method": "device.list", "params": {"groups" : [config.ECHO_GROUP]}, "id": 1}
         req = requests.post("{0}/".format(self.base_url), headers=self.headers, json=data)
         devices_json = json.loads(req.text)
 
@@ -54,24 +84,35 @@ class Domotiga:
 
         for device in devices_json['result']:
             #Enumerate devices list and call device.get to get all details, specifically group info.
-            print ("Getting info for " + device['name'])
+            logging.info("Getting info for " + device['name'])
 
             device_data = {"jsonrpc": "2.0", "method": "device.get", "params": {"device_id" : device['device_id']}, "id": 1}
             req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_data)
 
             device_json = json.loads(req.text)
 
-            if ECHO_GROUP in device_json['result']['groups']:
+            if config.ECHO_GROUP in device_json['result']['groups']:
  
                 # API limit in Echo implementation
                 entries += 1
                 if entries > 49:
-                    print("FATAL ERROR: Echo only supports up to 49 devices per Hue hub via local API")
+                    logging.warn("FATAL ERROR: Echo only supports up to 49 devices per Hue hub via local API")
                     sys.exit(1)
                            
                 
                 domain_type = 'light'
                 new_entity_name = device_json['result']['name']
+
+                #Get device type
+                device_type = "Colour"
+                
+                if device_json['result']['switchable'] == -1:
+                    device_type = "Switchable"
+
+                if device_json['result']['dimable'] == -1:
+                    device_type = "Dimable"
+
+
 
                 #Get device status
                 device_status = False
@@ -80,6 +121,17 @@ class Domotiga:
                     if ('valuenum' in values) and (values['valuenum'] == 1):
                         if ('value' in values) and (values['value'] == 'On'):
                             device_status = True
+
+
+
+                #Get device brightness
+                device_bri = 0
+
+                for values in device_json['result']['values']:
+                    if ('valuenum' in values) and (values['valuenum'] == 2):
+                        device_bri = values['value']
+
+
 
                 # Filter the friendly entity name so that it only contains letters and spaces
                 new_entity_name = re.sub("[^\w\ ]+", "", new_entity_name, re.U)
@@ -91,46 +143,60 @@ class Domotiga:
                 self.entities[unique_id]['name'] = new_entity_name
                 self.entities[unique_id]['entity_id'] = device_json['result']['device_id']
                 self.entities[unique_id]['domain_type'] = domain_type
+                self.entities[unique_id]['device_type'] = device_type
                 self.entities[unique_id]['cached_on'] = device_status
-                self.entities[unique_id]['cached_bri'] = 0
+                self.entities[unique_id]['cached_bri'] = round((int(device_bri)/100) * 254, 0) if int(device_bri) > 0 else 0
 
-                print('Adding {0}: device_id "{1}" with spoken name "{2}"'.format(unique_id, device_json['result']['device_id'], new_entity_name))
+                logging.info('Adding {0}: device_id "{1}" with spoken name "{2}"'.format(unique_id, device_json['result']['device_id'], new_entity_name))
 
         # Did we find any eligible entities?
         if len(self.entities) == 0:
-            print("ERROR: No eligible devices found. Did you configure Domotiga?")
+            logging.warn("ERROR: No eligible devices found. Did you configure Domotiga?")
             sys.exit(1)
 
-        print("Using {0} devices from Domotiga\n".format(len(self.entities)))
+        logging.info("Using {0} devices from Domotiga\n".format(len(self.entities)))
 
     def turn_on(self, entity_id):
-        print('Asking Domotiga to turn ON entity "{0}"'.format(entity_id))
+        logging.info('Asking Domotiga to turn ON entity "{0}"'.format(entity_id))
 
         device_on = {"jsonrpc": "2.0", "method": "device.set", "params": {"device_id" : entity_id, "valuenum" : 1, "value": "On"}, "id": 1}
         req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_on)
 
         if req.status_code != 200:
-            print("Call to Domotiga failed: {0}".format(req.json()))
+            logging.warn("Call to Domotiga failed: {0}".format(req.json()))
             flask.abort(500)
 
     def turn_off(self, entity_id):
-        print('Asking Domotiga to turn OFF entity "{0}"'.format(entity_id))
+        logging.info('Asking Domotiga to turn OFF entity "{0}"'.format(entity_id))
 
         device_off = {"jsonrpc": "2.0", "method": "device.set", "params": {"device_id" : entity_id, "valuenum" : 1, "value": "Off"}, "id": 1}
         req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_off)
 
         if req.status_code != 200:
-            print("Call to Domotiga failed: {0}".format(req.json()))
+            logging.warn("Call to Domotiga failed: {0}".format(req.json()))
             flask.abort(500)
 
     def turn_brightness(self, entity_id, brightness):
-        print('Asking Domotiga to turn ON entity "{0}" and set brightness to {1}'.format(entity_id, brightness))
+        logging.info('Asking Domotiga to turn ON entity "{0}" and set brightness to {1}'.format(entity_id, brightness))
+
+        device_bri = {"jsonrpc": "2.0", "method": "device.set", "params": {"device_id" : entity_id, "valuenum" : 2, "value": round((int(brightness)/254)*100, 0)}, "id": 1}
+        req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_bri)
+        logging.debug(req.json())
+
+        if req.status_code != 200:
+            logging.warn("Call to Domotiga failed: {0}".format(req.json()))
+            flask.abort(500)
 
     def get_status(self, unique_id):
-        print('Asking Domotiga for status of {0}'.format(self.entities[unique_id]['name']))
+        logging.info('Asking Domotiga for status of {0}'.format(self.entities[unique_id]['name']))
 
         device_data = {"jsonrpc": "2.0", "method": "device.get", "params": {"device_id" : self.entities[unique_id]['entity_id']}, "id": 1}
         req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_data)
+
+        if req.status_code != 200:
+            logging.warn("Call to Domotiga failed: {0}".format(req.json()))
+            flask.abort(500)
+            
         device_json = json.loads(req.text)
 
         #Get device status
@@ -142,6 +208,40 @@ class Domotiga:
                     device_status = True
 
         self.entities[unique_id]['cached_on'] = device_status
+
+        #Get device brightness
+        device_bri = 0
+
+        for values in device_json['result']['values']:
+            if ('valuenum' in values) and (values['valuenum'] == 2):
+                device_bri = values['value']
+
+        self.entities[unique_id]['cached_bri'] = round((int(device_bri)/100) * 254, 0) if int(device_bri) > 0 else 0
+
+    def get_device_json(self, unique_id):
+        device_json = {}
+        if self.entities[unique_id]['device_type'] == "Switchable":
+            device_json = {'state': {'on': self.entities[unique_id]['cached_on'], 'alert': 'none', 'reachable':True}, 'type': 'Non Dimmable light', 'name': self.entities[unique_id]['name'], 'modelid': 'LWB004', 'manufacturername': 'Philips', 'uniqueid': unique_id, 'swversion': '66012040'}
+
+        elif self.entities[unique_id]['device_type'] == "Dimable":
+            device_json = {'state': {'on': self.entities[unique_id]['cached_on'], 'bri': self.entities[unique_id]['cached_bri'], 'alert': 'none', 'reachable':True}, 'type': 'Dimmable light', 'name': self.entities[unique_id]['name'], 'modelid': 'LWB010', 'manufacturername': 'Philips', 'uniqueid': unique_id, 'swversion': '1.15.0_r18729'}
+
+        elif self.entities[unique_id]['device_type'] == "Colour":
+            device_json = {'state': {'on': self.entities[unique_id]['cached_on'], 'bri': self.entities[unique_id]['cached_bri'], 'hue':0, 'sat':0, 'effect': 'none', 'ct': 0, 'alert': 'none', 'reachable':True}, 'type': 'Extended color light', 'name': self.entities[unique_id]['name'], 'modelid': 'LCT015', 'manufacturername': 'Philips', 'uniqueid': unique_id, 'swversion': '1.29.0_r21169'}
+
+        else:
+            device_json = {}
+
+        return device_json
+
+    def debug_device(self, device_id):
+
+        device_data = {"jsonrpc": "2.0", "method": "device.get", "params": {"device_id" : device_id}, "id": 1}
+        req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_data)
+
+        return req.text
+
+
 
 #
 # UPNP Responder Thread Object
@@ -156,7 +256,7 @@ SERVER: FreeRTOS/6.0.5, UPnP/1.0, IpBridge/0.1
 ST: urn:schemas-upnp-org:device:basic:1
 USN: uuid:Socket-1_0-221438K0100073::urn:schemas-upnp-org:device:basic:1
 
-""".format(LISTEN_IP, HTTP_LISTEN_PORT).replace("\n", "\r\n").encode('utf-8')
+""".format(SERVER_IP, config.PROXY_PORT if config.PROXY else config.HTTP_LISTEN_PORT).replace("\n", "\r\n").encode('utf-8')
 
     stop_thread = False
 
@@ -169,7 +269,7 @@ USN: uuid:Socket-1_0-221438K0100073::urn:schemas-upnp-org:device:basic:1
         # Required for receiving multicast
         ssdpmc_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         ssdpmc_socket.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_IF, socket.inet_aton(LISTEN_IP))
-        ssdpmc_socket.setsockopt(socket.SOL_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton("239.255.255.250") + socket.inet_aton(LISTEN_IP))
+        ssdpmc_socket.setsockopt(socket.SOL_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton("239.255.255.250") + socket.inet_aton(SERVER_IP))
 
         ssdpmc_socket.bind(("239.255.255.250", 1900))
 
@@ -194,10 +294,15 @@ USN: uuid:Socket-1_0-221438K0100073::urn:schemas-upnp-org:device:basic:1
         # Request for thread to stop
         self.stop_thread = True
 
+
+
 # Global Variables
 dm = Domotiga()
 upnp_responder = UPNPResponderThread()
 app = flask.Flask(__name__)
+
+#Start UPNP Server
+upnp_responder.start()
 
 #
 # Flask Webserver Routes
@@ -206,7 +311,7 @@ app = flask.Flask(__name__)
 #
 # /description.xml required as part of Hue hub discovery
 #
-DESCRIPTION_XML_RESPONSE = """<?xml version="1.0" encoding="UTF-8" ?>
+DESCRIPTION_XML_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
 <root xmlns="urn:schemas-upnp-org:device-1-0">
 <specVersion>
 <major>1</major>
@@ -224,26 +329,14 @@ DESCRIPTION_XML_RESPONSE = """<?xml version="1.0" encoding="UTF-8" ?>
 <modelURL>http://www.meethue.com</modelURL>
 <serialNumber>1234</serialNumber>
 <UDN>uuid:2f402f80-da50-11e1-9b23-001788255acc</UDN>
-<presentationURL>index.html</presentationURL>
-<iconList>
-<icon>
-<mimetype>image/png</mimetype>
-<height>48</height>
-<width>48</width>
-<depth>24</depth>
-<url>hue_logo_0.png</url>
-</icon>
-<icon>
-<mimetype>image/png</mimetype>
-<height>120</height>
-<width>120</width>
-<depth>24</depth>
-<url>hue_logo_3.png</url>
-</icon>
-</iconList>
 </device>
 </root>
-""".format(LISTEN_IP, HTTP_LISTEN_PORT)
+""".format(SERVER_IP, config.PROXY_PORT if config.PROXY else config.HTTP_LISTEN_PORT)
+
+
+@app.route('/api/<token>/lights/<int:id_num>/debug', methods = ['GET'])
+def debug_device(token, id_num):
+    return flask.Response(dm.debug_device(id_num))
 
 @app.route('/description.xml', strict_slashes=False, methods = ['GET'])
 def hue_description_xml():
@@ -259,7 +352,7 @@ def hue_api_lights(token):
     json_response = {}
 
     for id_num in dm.entities.keys():
-        json_response[id_num] = {'state': {'on': dm.entities[id_num]['cached_on'], 'bri': dm.entities[id_num]['cached_bri'], 'hue':0, 'sat':0, 'effect': 'none', 'ct': 0, 'alert': 'none', 'reachable':True}, 'type': 'Dimmable light', 'name': dm.entities[id_num]['name'], 'modelid': 'LWB004', 'manufacturername': 'Philips', 'uniqueid': id_num, 'swversion': '66012040'}
+        json_response[id_num] = dm.get_device_json(id_num)
 
     return flask.Response(json.dumps(json_response), mimetype='application/json')
 
@@ -269,7 +362,19 @@ def hue_api_lights(token):
 @app.route('/api/<token>/lights/<int:id_num>/state', methods = ['PUT'])
 def hue_api_put_light(token, id_num):
     request_json = flask.request.get_json(force=True)
-    print("Echo PUT {0}/state: {1}".format(id_num, request_json))
+    logging.info("Echo PUT {0}/state: {1}".format(id_num, request_json))
+
+    # Echo requested a change to brightness
+    if 'bri' in request_json and 'on' in request_json:
+        dm.turn_brightness(dm.entities[id_num]['entity_id'], request_json['bri'])
+        dm.entities[id_num]['cached_bri'] = round((int(request_json['bri'])/254) * 100, 0) if int(request_json['bri']) > 0 else 0
+
+
+        if dm.entities[id_num]['cached_on'] == False:
+            dm.turn_on(dm.entities[id_num]['entity_id'])
+            dm.entities[id_num]['cached_on'] = True
+        
+        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/bri': request_json['bri']}}]), mimetype='application/json', status=200)
 
     # Echo requested device be turned "on"
     if 'on' in request_json and request_json['on'] == True:
@@ -295,7 +400,7 @@ def hue_api_put_light(token, id_num):
         dm.entities[id_num]['cached_bri'] = request_json['bri']
         return flask.Response(json.dumps([{'success': {'/lights/{0}/state/bri': request_json['bri']}}]), mimetype='application/json', status=200)
 
-    print("Unhandled API request: {0}".format(request_json))
+    logging.warn("Unhandled API request: {0}".format(request_json))
     flask.abort(500)
 
 #
@@ -307,7 +412,7 @@ def hue_api_individual_light(token, id_num):
     json_response = {}
 
 
-    json_response = {'state': {'on': dm.entities[id_num]['cached_on'], 'bri': dm.entities[id_num]['cached_bri'], 'hue':0, 'sat':0, 'effect': 'none', 'ct': 0, 'alert': 'none', 'reachable':True}, 'type': 'Dimmable light', 'name': dm.entities[id_num]['name'], 'modelid': 'LWB004', 'manufacturername': 'Philips', 'uniqueid': id_num, 'swversion': '66012040'}
+    json_response = dm.get_device_json(id_num)
 
     return flask.Response(json.dumps(json_response), mimetype='application/json')
 
@@ -317,8 +422,8 @@ def hue_api_individual_light(token, id_num):
 @app.route('/api/<token>/groups', strict_slashes=False)
 @app.route('/api/<token>/groups/0', strict_slashes=False)
 def hue_api_groups_0(token):
-    print("ERROR: If echo requests /api/groups that usually means it failed to parse /api/lights.")
-    print("This probably means the Echo didn't like something in a name.")
+    logging.info("ERROR: If echo requests /api/groups that usually means it failed to parse /api/lights.")
+    logging.info("This probably means the Echo didn't like something in a name.")
     return flask.abort(500)
 
 #
@@ -331,22 +436,13 @@ def hue_api_create_user():
     if 'devicetype' not in request_json:
         return flask.abort(500)
 
-    print("Echo asked to be assigned a username")
+    logging.info("Echo asked to be assigned a username")
     return flask.Response(json.dumps([{'success': {'username': '12345678901234567890'}}]), mimetype='application/json')
 
 
 #
-# Startit all up...
+# Start it all up...
 #
-def main():
-    global upnp_responder
-    global app
-
-    upnp_responder.start()
-
-    print("Starting Flask for HTTP listening on {0}:{1}...".format(LISTEN_IP, HTTP_LISTEN_PORT))
-    app.run(host=LISTEN_IP, port=HTTP_LISTEN_PORT, threaded=True, use_reloader=False)
-
-
 if __name__ == "__main__":
-    main()
+    logging.info("Starting Flask for HTTP listening on {0}:{1}...".format(LISTEN_IP, config.HTTP_LISTEN_PORT))
+    app.run(host=LISTEN_IP, port=config.HTTP_LISTEN_PORT, threaded=True, use_reloader=False)
