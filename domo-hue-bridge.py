@@ -24,6 +24,7 @@ import config
 global upnp_responder
 global app
 
+
 def getIpAddress():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("8.8.8.8", 80))
@@ -71,6 +72,17 @@ class Domotiga:
         self.headers = { 'content-type': 'application/json' }
         self.fetch_entities()
 
+    def convert_to_dim_value(self, brightness): 
+        dim_value = ""
+        dim_value = "Dim " + str(int(round((int(brightness)/254)*100)))                                           
+        return dim_value
+
+    def convert_from_dim_value(self, device_bri):
+        dim_value = 0
+        dim_value = int(device_bri.replace("Dim","").strip())
+        dim_value = round((int(dim_value)/100) * 254, 0)
+        return dim_value
+
     def fetch_entities(self):
         logging.info("Fetching Domotiga entities...")
 
@@ -116,23 +128,22 @@ class Domotiga:
 
                 #Get device status
                 device_status = False
+
+                #Get device brightness
+                device_bri = 1
                 
                 for values in device_json['result']['values']:
                     if ('valuenum' in values) and (values['valuenum'] == 1):
                         if ('value' in values) and (values['value'] == 'On'):
                             device_status = True
+                            device_bri = 254
 
+                        if ('value' in values) and ('Dim' in values['value']):
+                            device_bri = self.convert_from_dim_value(values['value'])
 
-
-                #Get device brightness
-                device_bri = 0
-
-                for values in device_json['result']['values']:
-                    if ('valuenum' in values) and (values['valuenum'] == 2):
-                        device_bri = values['value']
-
-
-
+                            if device_bri > 0:
+                                device_status = True
+                    
                 # Filter the friendly entity name so that it only contains letters and spaces
                 new_entity_name = re.sub("[^\w\ ]+", "", new_entity_name, re.U)
 
@@ -145,7 +156,7 @@ class Domotiga:
                 self.entities[unique_id]['domain_type'] = domain_type
                 self.entities[unique_id]['device_type'] = device_type
                 self.entities[unique_id]['cached_on'] = device_status
-                self.entities[unique_id]['cached_bri'] = round((int(device_bri)/100) * 254, 0) if int(device_bri) > 0 else 0
+                self.entities[unique_id]['cached_bri'] = device_bri
 
                 logging.info('Adding {0}: device_id "{1}" with spoken name "{2}"'.format(unique_id, device_json['result']['device_id'], new_entity_name))
 
@@ -156,30 +167,33 @@ class Domotiga:
 
         logging.info("Using {0} devices from Domotiga\n".format(len(self.entities)))
 
-    def turn_on(self, entity_id):
-        logging.info('Asking Domotiga to turn ON entity "{0}"'.format(entity_id))
 
-        device_on = {"jsonrpc": "2.0", "method": "device.set", "params": {"device_id" : entity_id, "valuenum" : 1, "value": "On"}, "id": 1}
+    def turn_on(self, unique_id):
+        logging.info('Asking Domotiga to turn ON entity "{0}"'.format(self.entities[unique_id]['name']))
+
+        device_on = {"jsonrpc": "2.0", "method": "device.set", "params": {"device_id" : self.entities[unique_id]['entity_id'], "valuenum" : 1, "value": "On"}, "id": 1}
+
         req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_on)
 
         if req.status_code != 200:
             logging.warn("Call to Domotiga failed: {0}".format(req.json()))
             flask.abort(500)
 
-    def turn_off(self, entity_id):
-        logging.info('Asking Domotiga to turn OFF entity "{0}"'.format(entity_id))
+    def turn_off(self, unique_id):
+        logging.info('Asking Domotiga to turn OFF entity "{0}"'.format(self.entities[unique_id]['name']))
 
-        device_off = {"jsonrpc": "2.0", "method": "device.set", "params": {"device_id" : entity_id, "valuenum" : 1, "value": "Off"}, "id": 1}
+        device_off = {"jsonrpc": "2.0", "method": "device.set", "params": {"device_id" : self.entities[unique_id]['entity_id'], "valuenum" : 1, "value": "Off"}, "id": 1}
         req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_off)
 
         if req.status_code != 200:
             logging.warn("Call to Domotiga failed: {0}".format(req.json()))
             flask.abort(500)
 
-    def turn_brightness(self, entity_id, brightness):
-        logging.info('Asking Domotiga to turn ON entity "{0}" and set brightness to {1}'.format(entity_id, brightness))
+    def turn_brightness(self, unique_id, brightness):
+        logging.info('Asking Domotiga to turn ON entity "{0}" and set brightness to {1}'.format(self.entities[unique_id]['name'], brightness))
 
-        device_bri = {"jsonrpc": "2.0", "method": "device.set", "params": {"device_id" : entity_id, "valuenum" : 2, "value": round((int(brightness)/254)*100, 0)}, "id": 1}
+        device_bri = {"jsonrpc": "2.0", "method": "device.set", "params": {"device_id" : self.entities[unique_id]['entity_id'], "valuenum" : 1, "value": self.convert_to_dim_value(brightness)}, "id": 1}
+        logging.debug(device_bri)
         req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_bri)
         logging.debug(req.json())
 
@@ -201,22 +215,25 @@ class Domotiga:
 
         #Get device status
         device_status = False
+
+        #Get device brightness
+        device_bri = 1
                 
         for values in device_json['result']['values']:
             if ('valuenum' in values) and (values['valuenum'] == 1):
                 if ('value' in values) and (values['value'] == 'On'):
                     device_status = True
+                    device_bri = 254
+
+                if ('value' in values) and ('Dim' in values['value']):
+                    device_bri = self.convert_from_dim_value(values['value'])
+
+                    if device_bri > 0:
+                        device_status = True
 
         self.entities[unique_id]['cached_on'] = device_status
-
-        #Get device brightness
-        device_bri = 0
-
-        for values in device_json['result']['values']:
-            if ('valuenum' in values) and (values['valuenum'] == 2):
-                device_bri = values['value']
-
-        self.entities[unique_id]['cached_bri'] = round((int(device_bri)/100) * 254, 0) if int(device_bri) > 0 else 0
+        self.entities[unique_id]['cached_bri'] = device_bri
+                                                             
 
     def get_device_json(self, unique_id):
         device_json = {}
@@ -304,6 +321,7 @@ app = flask.Flask(__name__)
 #Start UPNP Server
 upnp_responder.start()
 
+
 #
 # Flask Webserver Routes
 #
@@ -366,37 +384,31 @@ def hue_api_put_light(token, id_num):
 
     # Echo requested a change to brightness
     if 'bri' in request_json and 'on' in request_json:
-        dm.turn_brightness(dm.entities[id_num]['entity_id'], request_json['bri'])
-        dm.entities[id_num]['cached_bri'] = round((int(request_json['bri'])/254) * 100, 0) if int(request_json['bri']) > 0 else 0
-
-
-        if dm.entities[id_num]['cached_on'] == False:
-            dm.turn_on(dm.entities[id_num]['entity_id'])
-            dm.entities[id_num]['cached_on'] = True
-        
+        dm.turn_brightness(id_num, request_json['bri'])
+        dm.entities[id_num]['cached_bri'] = request_json['bri']
         return flask.Response(json.dumps([{'success': {'/lights/{0}/state/bri': request_json['bri']}}]), mimetype='application/json', status=200)
 
     # Echo requested device be turned "on"
     if 'on' in request_json and request_json['on'] == True:
-        dm.turn_on(dm.entities[id_num]['entity_id'])
+        dm.turn_on(id_num)
         dm.entities[id_num]['cached_on'] = True
         return flask.Response(json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): True }}]), mimetype='application/json', status=200)
 
     # Scripts and scenes can't really be turned off so treat 'off' as 'on'
     if 'on' in request_json and request_json['on'] == False and dm.entities[id_num]['domain_type'] in ['script', 'scene']:
-        dm.turn_on(dm.entities[id_num]['entity_id'])
+        dm.turn_on(id_num)
         dm.entities[id_num]['cached_on'] = False
         return flask.Response(json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): True }}]), mimetype='application/json', status=200)
 
     # Echo requested device be turned "off"
     if 'on' in request_json and request_json['on'] == False:
-        dm.turn_off(dm.entities[id_num]['entity_id'])
+        dm.turn_off(id_num)
         dm.entities[id_num]['cached_on'] = False
         return flask.Response(json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): False }}]), mimetype='application/json', status=200)
 
     # Echo requested a change to brightness
     if 'bri' in request_json:
-        dm.turn_brightness(dm.entities[id_num]['entity_id'], request_json['bri'])
+        dm.turn_brightness(id_num, request_json['bri'])
         dm.entities[id_num]['cached_bri'] = request_json['bri']
         return flask.Response(json.dumps([{'success': {'/lights/{0}/state/bri': request_json['bri']}}]), mimetype='application/json', status=200)
 
@@ -437,12 +449,13 @@ def hue_api_create_user():
         return flask.abort(500)
 
     logging.info("Echo asked to be assigned a username")
-    return flask.Response(json.dumps([{'success': {'username': '12345678901234567890'}}]), mimetype='application/json')
+    return flask.Response(json.dumps([{'success': {'username': '62017234447039242381'}}]), mimetype='application/json')
 
 
 #
 # Start it all up...
 #
 if __name__ == "__main__":
+
     logging.info("Starting Flask for HTTP listening on {0}:{1}...".format(LISTEN_IP, config.HTTP_LISTEN_PORT))
-    app.run(host=LISTEN_IP, port=config.HTTP_LISTEN_PORT, threaded=True, use_reloader=False)
+    app.run(host=LISTEN_IP, port=config.HTTP_LISTEN_PORT, threaded=True, use_reloader=False, debug=True)
