@@ -32,7 +32,7 @@ Set the ECHO_GROUP to be the name of the Domotiga group you created earlier and 
 
 The HTTP_LISTEN_PORT is the port the Hue Emulator responds on.  You can set this to anything that is not already in use by another process.
 
-#Amazon Echo v2, Dot v3 and Google Home
+# Amazon Echo v2, Dot v3 and Google Home
 
 Newer Amazon Alexa devices and Google home seem to need to have the domo-hue-bridge running on port 80 and will not discover devices if domo-hue-bridge is running on any other port.
 
@@ -41,7 +41,7 @@ There are 2 options to make this work with newer devices.
 1) Run domo-hue-bridge on port 80 by setting HTTP_LISTEN_PORT = 80
 2) Run domo-hue-bridge behind an Apache, Lighttpd or other webserver proxy.  This allows you to alos run other web applications on the same linux box on port 80.
 
-#Configuring domo-hue-bridge behind a proxy
+# Configuring domo-hue-bridge behind a proxy
 
 Fisrtly set the HTTP_LISTEN_PORT to 8000 (or something that is free on your server)
 
@@ -52,7 +52,7 @@ Configure your webserver to proxy /description.xml and /api to forward to localh
 
 Below is the configuration for an Apache server proxy.
 
-'''
+```
         ProxyPreserveHost On
 
         ProxyPass /api http://127.0.0.1:8000/api
@@ -60,7 +60,7 @@ Below is the configuration for an Apache server proxy.
 
         ProxyPass /description.xml http://127.0.0.1:8000/description.xml
         ProxyPassReverse /description.xml http://127.0.0.1:8000/description.xml
-'''
+```
 
 That's it!  Run this script and get your Echo to do a device discovery.  Your Domotiga devices should now show in the Alexa app.
 
