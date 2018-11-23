@@ -53,13 +53,13 @@ Configure your webserver to proxy /description.xml and /api to forward to localh
 Below is the configuration for an Apache server proxy.
 
 ```
-        ProxyPreserveHost On
+ProxyPreserveHost On
 
-        ProxyPass /api http://127.0.0.1:8000/api
-        ProxyPassReverse /api https://127.0.0.1:8000/api
+ProxyPass /api http://127.0.0.1:8000/api
+ProxyPassReverse /api https://127.0.0.1:8000/api
 
-        ProxyPass /description.xml http://127.0.0.1:8000/description.xml
-        ProxyPassReverse /description.xml http://127.0.0.1:8000/description.xml
+ProxyPass /description.xml http://127.0.0.1:8000/description.xml
+ProxyPassReverse /description.xml http://127.0.0.1:8000/description.xml
 ```
 
 That's it!  Run this script and get your Echo to do a device discovery.  Your Domotiga devices should now show in the Alexa app.
