@@ -386,7 +386,7 @@ def hue_api_put_light(token, id_num):
     if 'bri' in request_json and 'on' in request_json:
         dm.turn_brightness(id_num, request_json['bri'])
         dm.entities[id_num]['cached_bri'] = request_json['bri']
-        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/on': request_json['on']}},{'success': {'/lights/{0}/state/bri': request_json['bri']}}]), mimetype='application/json', status=200)
+        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): request_json['on']}},{'success': {'/lights/{0}/state/bri'.format(id_num): request_json['bri']}}]), mimetype='application/json', status=200)
 
     # Echo requested device be turned "on"
     if 'on' in request_json and request_json['on'] == True:
@@ -410,7 +410,7 @@ def hue_api_put_light(token, id_num):
     if 'bri' in request_json:
         dm.turn_brightness(id_num, request_json['bri'])
         dm.entities[id_num]['cached_bri'] = request_json['bri']
-        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/bri': request_json['bri']}}]), mimetype='application/json', status=200)
+        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/bri'.format(id_num): request_json['bri']}}]), mimetype='application/json', status=200)
 
     logging.warn("Unhandled API request: {0}".format(request_json))
     flask.abort(500)
