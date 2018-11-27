@@ -20,6 +20,8 @@ import socketserver
 import logging
 import argparse
 import config
+import math
+from werkzeug.contrib.fixers import ProxyFix
 
 global upnp_responder
 global app
@@ -46,7 +48,7 @@ if args.debug:
     print("Running in DEBUG Mode")
     logging.basicConfig(
         level=logging.DEBUG,
-        format="%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s",
+        format="%(asctime)s [%(levelname)-5.5s]  %(message)s",
         filemode='w',
         handlers=[
             logging.FileHandler("domo-hue-bridge.log", mode = 'w'),
@@ -80,7 +82,7 @@ class Domotiga:
     def convert_from_dim_value(self, device_bri):
         dim_value = 0
         dim_value = int(device_bri.replace("Dim","").strip())
-        dim_value = round((int(dim_value)/100) * 254, 0)
+        dim_value = int(math.ceil((int(dim_value)/100) * 254))
         return dim_value
 
     def fetch_entities(self):
@@ -280,7 +282,7 @@ USN: uuid:Socket-1_0-221438K0100073::urn:schemas-upnp-org:device:basic:1
     def run(self):
 
         # Listen for UDP port 1900 packets sent to SSDP multicast address
-        print("UPNP Responder Thread started...")
+        logging.info("UPNP Responder Thread started...")
         ssdpmc_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
         # Required for receiving multicast
@@ -302,10 +304,16 @@ USN: uuid:Socket-1_0-221438K0100073::urn:schemas-upnp-org:device:basic:1
 
             # SSDP M-SEARCH method received - respond to it unicast with our info
             if "M-SEARCH" in data.decode('utf-8'):
-                print("UPNP Responder sending response to {0}:{1}".format(addr[0], addr[1]))
+                #logging.debug("-----------------------------------------------------------------------------")
+                logging.debug("UPNP Request Received from {0}:{1} \r\n".format(addr[0], addr[1]))
+                #logging.debug("-----------------------------------------------------------------------------")
+                logging.info("UPNP Responder sending response to {0}:{1}".format(addr[0], addr[1]))
                 ssdpout_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 ssdpout_socket.sendto(self.UPNP_RESPONSE, addr)
                 ssdpout_socket.close()
+                #logging.debug("-----------------------------------------------------------------------------")
+                #logging.debug("UPNP Response \r\n" + self.UPNP_RESPONSE.decode('utf-8'))
+                #logging.debug("-----------------------------------------------------------------------------")
 
     def stop(self):
         # Request for thread to stop
@@ -317,6 +325,7 @@ USN: uuid:Socket-1_0-221438K0100073::urn:schemas-upnp-org:device:basic:1
 dm = Domotiga()
 upnp_responder = UPNPResponderThread()
 app = flask.Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app)
 
 #Start UPNP Server
 upnp_responder.start()
@@ -354,11 +363,17 @@ DESCRIPTION_XML_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
 
 @app.route('/api/<token>/lights/<int:id_num>/debug', methods = ['GET'])
 def debug_device(token, id_num):
-    return flask.Response(dm.debug_device(id_num))
+    r = dm.debug_device(id_num)
+    logging.debug(r)
+    return flask.Response(r)
+
 
 @app.route('/description.xml', strict_slashes=False, methods = ['GET'])
 def hue_description_xml():
-    return flask.Response(DESCRIPTION_XML_RESPONSE, mimetype='text/xml')
+    r = DESCRIPTION_XML_RESPONSE
+    logging.debug("ECHO GET description.xml from " + flask.request.remote_addr)
+    #logging.debug(r)
+    return flask.Response(r, mimetype='text/xml')
 
 #
 # Device enumeration request from Echo
@@ -366,13 +381,17 @@ def hue_description_xml():
 @app.route('/api/<token>/lights', strict_slashes=False, methods = ['GET'])
 @app.route('/api/<token>/lights/', strict_slashes=False, methods = ['GET'])
 def hue_api_lights(token):
+    logging.info("Echo GET Device Enumeration from {0}".format(flask.request.remote_addr))
     dm.fetch_entities()
     json_response = {}
 
     for id_num in dm.entities.keys():
         json_response[id_num] = dm.get_device_json(id_num)
 
-    return flask.Response(json.dumps(json_response), mimetype='application/json')
+    r = json.dumps(json_response)
+    logging.debug("Enumeration Response")
+    logging.debug(r)
+    return flask.Response(r, mimetype='application/json')
 
 #
 # Change state request from Echo
@@ -380,37 +399,57 @@ def hue_api_lights(token):
 @app.route('/api/<token>/lights/<int:id_num>/state', methods = ['PUT'])
 def hue_api_put_light(token, id_num):
     request_json = flask.request.get_json(force=True)
-    logging.info("Echo PUT {0}/state: {1}".format(id_num, request_json))
+    logging.info("Echo PUT {0} - {1}/state: {2} from {3}".format(id_num, dm.entities[id_num]['name'], request_json, flask.request.remote_addr))
 
     # Echo requested a change to brightness
     if 'bri' in request_json and 'on' in request_json:
         dm.turn_brightness(id_num, request_json['bri'])
         dm.entities[id_num]['cached_bri'] = request_json['bri']
-        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): request_json['on']}},{'success': {'/lights/{0}/state/bri'.format(id_num): request_json['bri']}}]), mimetype='application/json', status=200)
+
+        r = json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): request_json['on']}},{'success': {'/lights/{0}/state/bri'.format(id_num): request_json['bri']}}])
+        logging.debug("State Response")
+        logging.debug(r)
+        return flask.Response(r, mimetype='application/json', status=200)
 
     # Echo requested device be turned "on"
     if 'on' in request_json and request_json['on'] == True:
         dm.turn_on(id_num)
         dm.entities[id_num]['cached_on'] = True
-        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): True }}]), mimetype='application/json', status=200)
+
+        r = json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): True }}])
+        logging.debug("State Response")
+        logging.debug(r)
+        return flask.Response(r, mimetype='application/json', status=200)
 
     # Scripts and scenes can't really be turned off so treat 'off' as 'on'
     if 'on' in request_json and request_json['on'] == False and dm.entities[id_num]['domain_type'] in ['script', 'scene']:
         dm.turn_on(id_num)
         dm.entities[id_num]['cached_on'] = False
-        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): True }}]), mimetype='application/json', status=200)
+
+        r= json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): True }}])
+        logging.debug("State Response")
+        logging.debug(r)
+        return flask.Response(r, mimetype='application/json', status=200)
 
     # Echo requested device be turned "off"
     if 'on' in request_json and request_json['on'] == False:
         dm.turn_off(id_num)
         dm.entities[id_num]['cached_on'] = False
-        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): False }}]), mimetype='application/json', status=200)
+
+        r=json.dumps([{'success': {'/lights/{0}/state/on'.format(id_num): False }}])
+        logging.debug("State Response")
+        logging.debug(r)
+        return flask.Response(r, mimetype='application/json', status=200)
 
     # Echo requested a change to brightness
     if 'bri' in request_json:
         dm.turn_brightness(id_num, request_json['bri'])
         dm.entities[id_num]['cached_bri'] = request_json['bri']
-        return flask.Response(json.dumps([{'success': {'/lights/{0}/state/bri'.format(id_num): request_json['bri']}}]), mimetype='application/json', status=200)
+
+        r= json.dumps([{'success': {'/lights/{0}/state/bri'.format(id_num): request_json['bri']}}])
+        logging.debug("State Response")
+        logging.debug(r)
+        return flask.Response(r, mimetype='application/json', status=200)
 
     logging.warn("Unhandled API request: {0}".format(request_json))
     flask.abort(500)
@@ -420,13 +459,17 @@ def hue_api_put_light(token, id_num):
 #
 @app.route('/api/<token>/lights/<int:id_num>', strict_slashes=False, methods = ['GET'])
 def hue_api_individual_light(token, id_num):
+    logging.info("Echo GET {0} - {1} status request from {2}".format(id_num, dm.entities[id_num]['name'], flask.request.remote_addr))
     dm.get_status(id_num)
     json_response = {}
 
 
     json_response = dm.get_device_json(id_num)
 
-    return flask.Response(json.dumps(json_response), mimetype='application/json')
+    r = json.dumps(json_response)
+    logging.debug("Response to status request \r\n" + r)
+
+    return flask.Response(r, mimetype='application/json')
 
 #
 # Catch error state
@@ -458,4 +501,4 @@ def hue_api_create_user():
 if __name__ == "__main__":
 
     logging.info("Starting Flask for HTTP listening on {0}:{1}...".format(LISTEN_IP, config.HTTP_LISTEN_PORT))
-    app.run(host=LISTEN_IP, port=config.HTTP_LISTEN_PORT, threaded=True, use_reloader=False, debug=True)
+    app.run(host=LISTEN_IP, port=config.HTTP_LISTEN_PORT, threaded=True, use_reloader=False, debug=False)
