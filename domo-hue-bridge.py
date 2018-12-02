@@ -40,6 +40,10 @@ else:
     LISTEN_IP = SERVER_IP
 
 
+dim_values = (0, 4, 6, 9, 11, 14, 16, 19, 21, 24, 26, 29, 31, 34, 36, 39, 41, 44, 47, 49, 52, 54, 57, 59, 62, 64, 67, 69, 72, 74, 77, 79, 82, 84, 87, 90, 92, 95, 97, 100, 102, 105, 107, 110, 112, 115, 117, 120, 122, 125, 127, 130, 133, 135, 138, 140, 143, 145, 148, 150, 153, 155, 158, 160, 163, 165, 168, 171, 173, 176, 178, 181, 183, 186, 188, 191, 193, 196, 198, 201, 203, 206, 208, 211, 214, 216, 219, 221, 224, 226, 229, 231, 234, 236, 239, 241, 244, 246, 249, 251, 254)
+
+
+
 #Set Logging Level
 parser = argparse.ArgumentParser("domo-hue-bridge")
 parser.add_argument("--debug", help="Set debugging to a file for diagnosis of discovery issues", action="store_true")
@@ -49,6 +53,7 @@ if args.debug:
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s [%(levelname)-5.5s]  %(message)s",
+        filemode='w',
         handlers=[
             logging.FileHandler("domo-hue-bridge.log", mode = 'w'),
             logging.StreamHandler()
@@ -73,16 +78,30 @@ class Domotiga:
         self.headers = { 'content-type': 'application/json' }
         self.fetch_entities()
 
-    def convert_to_dim_value(self, brightness): 
-        dim_value = ""
-        dim_value = "Dim " + str(int(round((int(brightness)/254)*100)))                                           
-        return dim_value
+    def convert_to_dim_value(self, brightness):
+        # Uses correcting values to get correct match to Alexa brightness values
+        dim_value = 0
+        #dim_value = (int(brightness)*100)/255 + int(brightness)/1024
 
+        #Fix for odd values below 6% dim on Dot v3
+        #v3 = [4,6,9,11,14,16]
+        #if (int(brightness) in v3):
+        #    dim_value = dim_value - 0.5
+        try:
+            dim_value = dim_values.index(int(brightness))
+        except ValueError:
+            dim_value = int(round((int(brightness)*100)/255 + int(brightness)/1024,0))
+
+        logging.debug("Dim value is {0}%".format(str(dim_value)))
+        
+        return "Dim " + str(dim_value)
+
+    
     def convert_from_dim_value(self, device_bri):
         dim_value = 0
-        dim_value = int(device_bri.replace("Dim","").strip())
-        dim_value = int(math.ceil((int(dim_value)/100) * 254))
-        return dim_value
+        dim_value = int(float(device_bri.replace("Dim","").strip()))
+        #dim_value = int((int(dim_value)/100) * 254)
+        return dim_values[dim_value]
 
     def fetch_entities(self):
         logging.info("Fetching Domotiga entities...")
@@ -252,11 +271,16 @@ class Domotiga:
 
         return device_json
 
-    def debug_device(self, device_id):
+    def debug_device(self, unique_id):
 
-        device_data = {"jsonrpc": "2.0", "method": "device.get", "params": {"device_id" : device_id}, "id": 1}
+        device_data = {"jsonrpc": "2.0", "method": "device.get", "params": {"device_id" : self.entities[unique_id]['entity_id']}, "id": 1}
+        logging.debug(device_data)
         req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_data)
 
+        if req.status_code != 200:
+            logging.warn("Call to Domotiga failed: {0}".format(req.json()))
+            flask.abort(500)
+            
         return req.text
 
 
