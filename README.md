@@ -62,6 +62,14 @@ ProxyPass /description.xml http://127.0.0.1:8000/description.xml
 ProxyPassReverse /description.xml http://127.0.0.1:8000/description.xml
 ```
 
+And this is for a Lighttpd server
+
+```
+server.modules += ( "mod_proxy" )
+$HTTP["url"] =~ "^/description.xml" { proxy.server = ( "" => ( ( "host" => "127.0.0.1", "port" => "8000" ) ) ) }
+$HTTP["url"] =~ "^/api" { proxy.server = ( "" => ( ( "host" => "127.0.0.1", "port" => "8000" ) ) ) }
+```
+
 That's it!  Run this script and get your Echo to do a device discovery.  Your Domotiga devices should now show in the Alexa app.
 
 # Installing domo-hue-bridge as a service
