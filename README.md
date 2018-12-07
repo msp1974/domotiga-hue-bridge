@@ -39,7 +39,7 @@ Newer Amazon Alexa devices and Google home seem to need to have the domo-hue-bri
 There are 2 options to make this work with newer devices.
 
 1) Run domo-hue-bridge on port 80 by setting HTTP_LISTEN_PORT = 80
-2) Run domo-hue-bridge behind an Apache, Lighttpd or other webserver proxy.  This allows you to alos run other web applications on the same linux box on port 80.
+2) Run domo-hue-bridge behind an Apache, Lighttpd or other webserver proxy.  This allows you to also run other web applications on the same linux box on port 80.
 
 # Configuring domo-hue-bridge behind a proxy
 
