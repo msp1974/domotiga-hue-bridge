@@ -40,20 +40,22 @@ else:
     LISTEN_IP = SERVER_IP
 
 
+#Fix dim values due to issues with Dot v3 not using direct divide by 2.55 maths
 dim_values = (0, 4, 6, 9, 11, 14, 16, 19, 21, 24, 26, 29, 31, 34, 36, 39, 41, 44, 47, 49, 52, 54, 57, 59, 62, 64, 67, 69, 72, 74, 77, 79, 82, 84, 87, 90, 92, 95, 97, 100, 102, 105, 107, 110, 112, 115, 117, 120, 122, 125, 128, 130, 133, 135, 138, 140, 143, 145, 148, 150, 153, 155, 158, 160, 163, 165, 168, 171, 173, 176, 178, 181, 183, 186, 188, 191, 193, 196, 198, 201, 203, 206, 208, 211, 214, 216, 219, 221, 224, 226, 229, 231, 234, 236, 239, 241, 244, 246, 249, 251, 254)
 
 
-
+#
 #Set Logging Level
+#
 parser = argparse.ArgumentParser("domo-hue-bridge")
-parser.add_argument("--debug", help="Set debugging to a file for diagnosis of discovery issues", action="store_true")
+parser.add_argument("--debug", help="Run in debug mode to write to file for diagnosis of issues.", action="store_true")
 args = parser.parse_args()
+
 if args.debug:
     print("Running in DEBUG Mode")
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s [%(levelname)-5.5s]  %(message)s",
-        filemode='w',
         handlers=[
             logging.FileHandler("domo-hue-bridge.log", mode = 'w'),
             logging.StreamHandler()
@@ -62,10 +64,11 @@ else:
     print("Running in NORMAL Mode")
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(message)s",
+        format="%(asctime)s [%(levelname)-5.5s]  %(message)s",
         handlers=[
             logging.StreamHandler()
         ])
+
 #
 # Domotiga
 #
@@ -79,18 +82,14 @@ class Domotiga:
         self.fetch_entities()
 
     def convert_to_dim_value(self, brightness):
-        # Uses correcting values to get correct match to Alexa brightness values
         dim_value = 0
-        #dim_value = (int(brightness)*100)/255 + int(brightness)/1024
-
-        #Fix for odd values below 6% dim on Dot v3
-        #v3 = [4,6,9,11,14,16]
-        #if (int(brightness) in v3):
-        #    dim_value = dim_value - 0.5
+        
+        # Dot v3 fix to lookup conversion values for % dimming.
+        # If value not in list use multiply by 2.55 maths (works for v2 and below)
         try:
             dim_value = dim_values.index(int(brightness))
         except ValueError:
-            dim_value = int(round((int(brightness)*100)/255 + int(brightness)/1024,0))
+            dim_value = int(round((int(brightness)*100)/255))
 
         logging.debug("Dim value is {0}%".format(str(dim_value)))
         
@@ -98,16 +97,21 @@ class Domotiga:
 
     
     def convert_from_dim_value(self, device_bri):
+        
+        # Get dim % conversion value for Alexa status update
+        # v2 does not matter if different. v3 has to match what was sent.
         dim_value = 0
         dim_value = int(float(device_bri.replace("Dim","").strip()))
-        #dim_value = int((int(dim_value)/100) * 254)
+
         return dim_values[dim_value]
+
 
     def fetch_entities(self):
         logging.info("Fetching Domotiga entities...")
 
         entities = {}
 
+        # Get list of devices in the defined group from Domotiga
         data = {"jsonrpc": "2.0", "method": "device.list", "params": {"groups" : [config.ECHO_GROUP]}, "id": 1}
         req = requests.post("{0}/".format(self.base_url), headers=self.headers, json=data)
         devices_json = json.loads(req.text)
@@ -131,7 +135,8 @@ class Domotiga:
                     logging.warn("FATAL ERROR: Echo only supports up to 49 devices per Hue hub via local API")
                     sys.exit(1)
                            
-                
+                # Set all devices to lights in hue bridge.
+                # TODO: Allow events as scenes
                 domain_type = 'light'
                 new_entity_name = device_json['result']['name']
 
@@ -170,6 +175,7 @@ class Domotiga:
                 # Give device unique ID
                 unique_id = zlib.crc32(("DOM" + str(device_json['result']['device_id'])).encode('utf-8'))
 
+                # Set values for device entity
                 self.entities[unique_id] = {}
                 self.entities[unique_id]['name'] = new_entity_name
                 self.entities[unique_id]['entity_id'] = device_json['result']['device_id']
@@ -199,6 +205,7 @@ class Domotiga:
             logging.warn("Call to Domotiga failed: {0}".format(req.json()))
             flask.abort(500)
 
+
     def turn_off(self, unique_id):
         logging.info('Asking Domotiga to turn OFF entity "{0}"'.format(self.entities[unique_id]['name']))
 
@@ -208,6 +215,7 @@ class Domotiga:
         if req.status_code != 200:
             logging.warn("Call to Domotiga failed: {0}".format(req.json()))
             flask.abort(500)
+
 
     def turn_brightness(self, unique_id, brightness):
         logging.info('Asking Domotiga to turn ON entity "{0}" and set brightness to {1}'.format(self.entities[unique_id]['name'], brightness))
@@ -220,6 +228,7 @@ class Domotiga:
         if req.status_code != 200:
             logging.warn("Call to Domotiga failed: {0}".format(req.json()))
             flask.abort(500)
+
 
     def get_status(self, unique_id):
         logging.info('Asking Domotiga for status of {0}'.format(self.entities[unique_id]['name']))
@@ -256,7 +265,10 @@ class Domotiga:
                                                              
 
     def get_device_json(self, unique_id):
+        # determines correct json response to send on device discovery and status based on type of light
+
         device_json = {}
+
         if self.entities[unique_id]['device_type'] == "Switchable":
             device_json = {'state': {'on': self.entities[unique_id]['cached_on'], 'alert': 'none', 'reachable':True}, 'type': 'Non Dimmable light', 'name': self.entities[unique_id]['name'], 'modelid': 'LWB004', 'manufacturername': 'Philips', 'uniqueid': unique_id, 'swversion': '66012040'}
 
@@ -271,8 +283,9 @@ class Domotiga:
 
         return device_json
 
-    def debug_device(self, unique_id):
 
+    def debug_device(self, unique_id):
+        # displays full domotiga json response for device.get when calling /api/{userid}/lights/{unique_id}/debug
         device_data = {"jsonrpc": "2.0", "method": "device.get", "params": {"device_id" : self.entities[unique_id]['entity_id']}, "id": 1}
         logging.debug(device_data)
         req = requests.post("{0}".format(self.base_url), headers=self.headers, json=device_data)
@@ -327,16 +340,11 @@ USN: uuid:Socket-1_0-221438K0100073::urn:schemas-upnp-org:device:basic:1
 
             # SSDP M-SEARCH method received - respond to it unicast with our info
             if "M-SEARCH" in data.decode('utf-8'):
-                #logging.debug("-----------------------------------------------------------------------------")
                 logging.debug("UPNP Request Received from {0}:{1} \r\n".format(addr[0], addr[1]))
-                #logging.debug("-----------------------------------------------------------------------------")
                 logging.info("UPNP Responder sending response to {0}:{1}".format(addr[0], addr[1]))
                 ssdpout_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 ssdpout_socket.sendto(self.UPNP_RESPONSE, addr)
                 ssdpout_socket.close()
-                #logging.debug("-----------------------------------------------------------------------------")
-                #logging.debug("UPNP Response \r\n" + self.UPNP_RESPONSE.decode('utf-8'))
-                #logging.debug("-----------------------------------------------------------------------------")
 
     def stop(self):
         # Request for thread to stop
@@ -383,19 +391,22 @@ DESCRIPTION_XML_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
 </root>
 """.format(SERVER_IP, config.PROXY_PORT if config.PROXY else config.HTTP_LISTEN_PORT)
 
-
+#
+# Domotiga device debug - return json from domotiga device.get
+#
 @app.route('/api/<token>/lights/<int:id_num>/debug', methods = ['GET'])
 def debug_device(token, id_num):
     r = dm.debug_device(id_num)
     logging.debug(r)
     return flask.Response(r)
 
-
+#
+# description.xml request for device discovery
+#
 @app.route('/description.xml', strict_slashes=False, methods = ['GET'])
 def hue_description_xml():
     r = DESCRIPTION_XML_RESPONSE
     logging.debug("ECHO GET description.xml from " + flask.request.remote_addr)
-    #logging.debug(r)
     return flask.Response(r, mimetype='text/xml')
 
 #
@@ -424,7 +435,7 @@ def hue_api_put_light(token, id_num):
     request_json = flask.request.get_json(force=True)
     logging.info("Echo PUT {0} - {1}/state: {2} from {3}".format(id_num, dm.entities[id_num]['name'], request_json, flask.request.remote_addr))
 
-    # Echo requested a change to brightness
+    # Echo requested a change to device state and brightness
     if 'bri' in request_json and 'on' in request_json:
         dm.turn_brightness(id_num, request_json['bri'])
         dm.entities[id_num]['cached_bri'] = request_json['bri']
@@ -464,7 +475,7 @@ def hue_api_put_light(token, id_num):
         logging.debug(r)
         return flask.Response(r, mimetype='application/json', status=200)
 
-    # Echo requested a change to brightness
+    # Echo requested device to change brightness
     if 'bri' in request_json:
         dm.turn_brightness(id_num, request_json['bri'])
         dm.entities[id_num]['cached_bri'] = request_json['bri']
