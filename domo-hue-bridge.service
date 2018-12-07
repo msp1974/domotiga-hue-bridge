@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart= /usr/bin/python3.4 /opt/domo-hue-bridge/domo-hue-bridge.py
+ExecStart= /usr/bin/python3.4 /opt/domotiga-hue-bridge/domo-hue-bridge.py
 #User=domo-hue-bridge
 Restart=always
 RestartSec=2
