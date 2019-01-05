@@ -4,9 +4,6 @@
 # https://github.com/msp9174/domotiga-hue-bridge
 # Released under MIT license - Copyright 2018 - Mark Parker
 #
-# Version 0.1 - Initial release
-# Version 0.2 - Fixed: Issues with Dot v3 conversion between % and 1..255 values
-# Version 0.3 - Added: Support for multi value dim devices
 
 import requests
 import flask
@@ -269,6 +266,8 @@ class Domotiga:
         if device_json['result']['multivaluedim'] == -1:
             device_multivaluedim = True
 
+        logging.debug("Multivaluedim = {0}" . format(device_multivaluedim))
+
         #Get device brightness
         device_bri = 1
         
@@ -283,16 +282,16 @@ class Domotiga:
                     if ('value' in values):
                         device_bri = self.convert_from_dim_value(values['value'])
 
-                elif ('valuenum' in values) and (values['valuenum'] == 1):
-                    if ('value' in values) and (values['value'] == 'On'):
+            elif ('valuenum' in values) and (values['valuenum'] == 1):
+                if ('value' in values) and (values['value'] == 'On'):
+                    device_status = True
+                    device_bri = 255
+
+                if ('value' in values) and ('Dim' in values['value']):
+                    device_bri = self.convert_from_dim_value(values['value'])
+
+                    if device_bri > 0:
                         device_status = True
-                        device_bri = 255
-
-                    if ('value' in values) and ('Dim' in values['value']):
-                        device_bri = self.convert_from_dim_value(values['value'])
-
-                        if device_bri > 0:
-                            device_status = True
 
 
         self.entities[unique_id]['cached_on'] = device_status
