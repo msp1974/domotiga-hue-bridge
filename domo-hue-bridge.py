@@ -4,6 +4,9 @@
 # https://github.com/msp9174/domotiga-hue-bridge
 # Released under MIT license - Copyright 2018 - Mark Parker
 #
+# Version 0.1 - Initial release
+# Version 0.2 - Fixed: Issues with Dot v3 conversion between % and 1..255 values
+# Version 0.3 - Added: Support for multi value dim devices
 
 import requests
 import flask
@@ -142,6 +145,7 @@ class Domotiga:
 
                 #Get device type
                 device_type = "Colour"
+                device_multivaluedim = False
                 
                 if device_json['result']['switchable'] == -1:
                     device_type = "Switchable"
@@ -149,16 +153,29 @@ class Domotiga:
                 if device_json['result']['dimable'] == -1:
                     device_type = "Dimable"
 
+                #Handle multi value dim functionality
+                if device_json['result']['multivaluedim'] == -1:
+                    device_multivaluedim = True
+
 
 
                 #Get device status
                 device_status = False
 
                 #Get device brightness
-                device_bri = 1
+                device_bri = 0
                 
                 for values in device_json['result']['values']:
-                    if ('valuenum' in values) and (values['valuenum'] == 1):
+                    if device_multivaluedim:
+                        if ('valuenum' in values) and (values['valuenum'] == 1):
+                            if ('value' in values) and (values['value'] == 'On'):
+                                device_status = True
+                      
+                        if ('valuenum' in values) and (values['valuenum'] == 2):
+                            if ('value' in values):
+                                device_bri = self.convert_from_dim_value(values['value'])
+
+                    elif ('valuenum' in values) and (values['valuenum'] == 1):
                         if ('value' in values) and (values['value'] == 'On'):
                             device_status = True
                             device_bri = 254
@@ -245,20 +262,38 @@ class Domotiga:
         #Get device status
         device_status = False
 
+        #Handle multi value dim
+        device_multivaluedim = False
+        
+        #Handle multi value dim functionality
+        if device_json['result']['multivaluedim'] == -1:
+            device_multivaluedim = True
+
         #Get device brightness
         device_bri = 1
+        
                 
         for values in device_json['result']['values']:
-            if ('valuenum' in values) and (values['valuenum'] == 1):
-                if ('value' in values) and (values['value'] == 'On'):
-                    device_status = True
-                    device_bri = 254
-
-                if ('value' in values) and ('Dim' in values['value']):
-                    device_bri = self.convert_from_dim_value(values['value'])
-
-                    if device_bri > 0:
+            if device_multivaluedim:
+                if ('valuenum' in values) and (values['valuenum'] == 1):
+                    if ('value' in values) and (values['value'] == 'On'):
                         device_status = True
+                      
+                if ('valuenum' in values) and (values['valuenum'] == 2):
+                    if ('value' in values):
+                        device_bri = self.convert_from_dim_value(values['value'])
+
+                elif ('valuenum' in values) and (values['valuenum'] == 1):
+                    if ('value' in values) and (values['value'] == 'On'):
+                        device_status = True
+                        device_bri = 255
+
+                    if ('value' in values) and ('Dim' in values['value']):
+                        device_bri = self.convert_from_dim_value(values['value'])
+
+                        if device_bri > 0:
+                            device_status = True
+
 
         self.entities[unique_id]['cached_on'] = device_status
         self.entities[unique_id]['cached_bri'] = device_bri
@@ -341,6 +376,7 @@ USN: uuid:Socket-1_0-221438K0100073::urn:schemas-upnp-org:device:basic:1
             # SSDP M-SEARCH method received - respond to it unicast with our info
             if "M-SEARCH" in data.decode('utf-8'):
                 logging.debug("UPNP Request Received from {0}:{1} \r\n".format(addr[0], addr[1]))
+                logging.debug(data.decode('utf-8'))
                 logging.info("UPNP Responder sending response to {0}:{1}".format(addr[0], addr[1]))
                 ssdpout_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 ssdpout_socket.sendto(self.UPNP_RESPONSE, addr)
