@@ -285,7 +285,7 @@ class Domotiga:
             elif ('valuenum' in values) and (values['valuenum'] == 1):
                 if ('value' in values) and (values['value'] == 'On'):
                     device_status = True
-                    device_bri = 255
+                    device_bri = 254
 
                 if ('value' in values) and ('Dim' in values['value']):
                     device_bri = self.convert_from_dim_value(values['value'])
